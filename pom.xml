@@ -68,6 +68,7 @@
         <module>impl</module>
         <module>junit5-extension</module>
         <module>integration-test</module>
+        <module>kroxylicious-junit5-extension-bom</module>
     </modules>
 
     <properties>

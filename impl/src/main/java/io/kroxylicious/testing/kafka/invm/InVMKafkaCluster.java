@@ -6,7 +6,6 @@
 
 package io.kroxylicious.testing.kafka.invm;
 
-import java.io.File;
 import java.io.IOException;
 import java.io.PrintStream;
 import java.io.UncheckedIOException;
@@ -15,10 +14,12 @@ import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.net.InetSocketAddress;
+import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.SimpleFileVisitor;
+import java.nio.file.attribute.BasicFileAttributes;
 import java.util.Arrays;
-import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
@@ -380,7 +381,6 @@ public class InVMKafkaCluster implements KafkaCluster, KafkaClusterConfig.KafkaE
         });
     }
 
-    @SuppressWarnings("ResultOfMethodCallIgnored")
     @Override
     public synchronized void close() throws Exception {
         try {
@@ -394,14 +394,7 @@ public class InVMKafkaCluster implements KafkaCluster, KafkaClusterConfig.KafkaE
             }
         }
         finally {
-            if (tempDirectory.toFile().exists()) {
-                try (var ps = Files.walk(tempDirectory);
-                        var s = ps
-                                .sorted(Comparator.reverseOrder())
-                                .map(Path::toFile)) {
-                    s.forEach(File::delete);
-                }
-            }
+            ensureDirectoryIsEmpty(tempDirectory);
         }
     }
 
@@ -437,21 +430,6 @@ public class InVMKafkaCluster implements KafkaCluster, KafkaClusterConfig.KafkaE
         matchingServers.forEach(Server::awaitShutdown);
     }
 
-    @SuppressWarnings("ResultOfMethodCallIgnored")
-    private static void ensureDirectoryIsEmpty(Path path) {
-        if (Files.exists(path)) {
-            try (var ps = Files.walk(path);
-                    var s = ps
-                            .sorted(Comparator.reverseOrder())
-                            .map(Path::toFile)) {
-                s.forEach(File::delete);
-            }
-            catch (IOException e) {
-                throw new UncheckedIOException("Error whilst deleting " + path, e);
-            }
-        }
-    }
-
     @Override
     public synchronized int getNumOfBrokers() {
         return servers.size();
@@ -468,13 +446,45 @@ public class InVMKafkaCluster implements KafkaCluster, KafkaClusterConfig.KafkaE
         return EndpointPair.builder().bind(new Endpoint("0.0.0.0", port)).connect(new Endpoint("localhost", port)).build();
     }
 
+    @Override
+    public @NonNull Admin createAdmin() {
+        return CloseableAdmin.create(clusterConfig.getAnonConnectConfigForCluster(buildBrokerList(nodeId -> getEndpointPair(Listener.ANON, nodeId))));
+    }
+
     private static void trapKafkaSystemExit() {
         Exit.setExitProcedure(InVMKafkaCluster::exitHandler);
         Exit.setHaltProcedure(InVMKafkaCluster::exitHandler);
     }
 
-    @Override
-    public @NonNull Admin createAdmin() {
-        return CloseableAdmin.create(clusterConfig.getAnonConnectConfigForCluster(buildBrokerList(nodeId -> getEndpointPair(Listener.ANON, nodeId))));
+    private static void ensureDirectoryIsEmpty(Path path) {
+        try {
+            if (Files.exists(path)) {
+                Files.walkFileTree(path, DeletingFileVisitor.INSTANCE);
+            }
+        }
+        catch (IOException e) {
+            throw new UncheckedIOException("Error whilst deleting " + path, e);
+        }
+    }
+
+    @SuppressWarnings("java:S6548")
+    static class DeletingFileVisitor extends SimpleFileVisitor<Path> {
+        public static final DeletingFileVisitor INSTANCE = new DeletingFileVisitor();
+
+        private DeletingFileVisitor() {
+            //I'm a singleton!
+        }
+
+        @Override
+        public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) throws IOException {
+            Files.delete(file);
+            return FileVisitResult.CONTINUE;
+        }
+
+        @Override
+        public FileVisitResult postVisitDirectory(Path dir, IOException exc) throws IOException {
+            Files.delete(dir);
+            return FileVisitResult.CONTINUE;
+        }
     }
 }
